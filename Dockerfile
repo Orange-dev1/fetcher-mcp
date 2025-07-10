@@ -53,7 +53,7 @@ RUN npm ci --only=production && npm cache clean --force
 
 # Copy built application from builder stage
 COPY --from=builder /app/build ./build
-COPY --from=builder /app/icon.svg ./icon.svg
+COPY icon.svg ./icon.svg
 
 # Change ownership to non-root user
 RUN chown -R nodejs:nodejs /app
