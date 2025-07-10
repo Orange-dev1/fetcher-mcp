@@ -1,42 +1,72 @@
 # Build stage
-FROM --platform=$BUILDPLATFORM node:22-slim AS builder
+FROM node:22-alpine AS builder
 
+# Set working directory
 WORKDIR /app
 
-# Copy dependency files first to leverage caching
+# Install build dependencies
+RUN apk add --no-cache python3 make g++
+
+# Copy package files for dependency installation
 COPY package*.json ./
 
+# Install all dependencies (including dev dependencies for build)
 RUN npm ci
 
 # Copy source code and configuration files
 COPY tsconfig.json ./
 COPY src/ ./src/
 
-# Build the project
+# Build the TypeScript project
 RUN npm run build
 
 # Runtime stage
-FROM --platform=$TARGETPLATFORM node:22-slim AS runner
+FROM node:22-alpine AS runner
 
-# Install system dependencies required for runtime
-RUN apt-get update && apt-get install -y \
-    wget \
-    gnupg \
+# Create non-root user for security
+RUN addgroup -g 1001 -S nodejs && \
+    adduser -S nodejs -u 1001
+
+# Install system dependencies required for Playwright
+RUN apk add --no-cache \
+    chromium \
+    nss \
+    freetype \
+    freetype-dev \
+    harfbuzz \
     ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+    ttf-freefont \
+    && rm -rf /var/cache/apk/*
 
+# Set environment variables for Playwright
+ENV PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1
+ENV PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH=/usr/bin/chromium-browser
+
+# Set working directory
 WORKDIR /app
 
-# Copy only production dependencies
-COPY --from=builder /app/build ./build
+# Copy package files
 COPY package*.json ./
-RUN npm ci --only=production
 
-# Install Playwright browsers (ensure headless shell is installed)
-RUN npx playwright install --with-deps chromium
+# Install only production dependencies
+RUN npm ci --only=production && npm cache clean --force
+
+# Copy built application from builder stage
+COPY --from=builder /app/build ./build
+COPY --from=builder /app/icon.svg ./icon.svg
+
+# Change ownership to non-root user
+RUN chown -R nodejs:nodejs /app
+
+# Switch to non-root user
+USER nodejs
 
 # Expose port
 EXPOSE 3000
 
-# Startup command
+# Health check
+HEALTHCHECK --interval=30s --timeout=3s --start-period=5s --retries=3 \
+    CMD node -e "require('http').get('http://localhost:3000/health', (res) => { process.exit(res.statusCode === 200 ? 0 : 1) })" || exit 1
+
+# Default startup command
 CMD ["node", "build/index.js", "--log", "--transport=http", "--host=0.0.0.0", "--port=3000"] 
